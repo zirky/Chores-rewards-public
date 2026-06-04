@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chores & Rewards - DEMO</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; color: #333; }
+.navbar { background: #1a1a2e; color: white; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+.brand { font-size: 1.4rem; font-weight: bold; }
+.nav-links button { background: transparent; border: 2px solid #fff; color: white; padding: 0.4rem 1.2rem; border-radius: 20px; cursor: pointer; margin-left: 0.5rem; font-size: 1rem; transition: background 0.2s; }
+.nav-links button.active, .nav-links button:hover { background: #e94560; border-color: #e94560; }
+main { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+.card { background: white; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+h2 { margin-bottom: 1rem; color: #1a1a2e; }
+.btn { padding: 0.5rem 1.2rem; border: none; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: 600; transition: opacity 0.2s; }
+.btn:hover { opacity: 0.85; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: #e94560; color: white; }
+.btn-success { background: #28a745; color: white; }
+.btn-danger { background: #dc3545; color: white; }
+.badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
+.badge-pending { background: #fff3cd; color: #856404; }
+.badge-approved { background: #d1e7dd; color: #0f5132; }
+.badge-rejected { background: #f8d7da; color: #842029; }
+.chore-list { list-style: none; }
+.chore-item { display: flex; justify-content: space-between; align-items: center; padding: 0.8rem 0; border-bottom: 1px solid #eee; }
+.chore-item:last-child { border-bottom: none; }
+.chore-info { display: flex; flex-direction: column; }
+.chore-name { font-weight: 600; font-size: 1rem; }
+.chore-reward { color: #e94560; font-size: 0.85rem; margin-top: 0.2rem; }
+.table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+.table th { text-align: left; padding: 0.5rem; border-bottom: 2px solid #eee; color: #1a1a2e; }
+.table td { padding: 0.5rem; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+.actions { display: flex; gap: 0.4rem; }
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.modal { background: white; border-radius: 16px; padding: 2rem; width: 320px; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+.modal h3 { margin-bottom: 0.75rem; color: #1a1a2e; }
+.modal-msg { margin-bottom: 1rem; color: #555; font-size: 0.9rem; }
+.modal input { width: 100%; padding: 0.6rem 1rem; font-size: 1.2rem; letter-spacing: 0.3em; border: 2px solid #ddd; border-radius: 8px; margin-bottom: 0.5rem; text-align: center; }
+.modal input:focus { outline: none; border-color: #e94560; }
+.error { color: #dc3545; font-size: 0.85rem; margin-bottom: 0.5rem; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; }
+.empty { color: #888; font-style: italic; padding: 1rem 0; }
+.rate-card { background: #1a1a2e; color: #ccc; font-size: 0.9rem; padding: 0.7rem 1.5rem; border-radius: 12px; margin-bottom: 1.5rem; }
+.hidden { display: none; }
+</style>
+</head>
+<body>
+<nav class="navbar">
+  <span class="brand">🏠 Chores & Rewards</span>
+  <div class="nav-links">
+    <button id="btnChild" class="active">👦 Dítě</button>
+    <button id="btnParent">👨 Rodič</button>
+  </div>
+</nav>
+<main>
+  <!-- Child View -->
+  <div id="viewChild">
+    <div class="card">
+      <h2>📝 Moje úkoly</h2>
+      <ul class="chore-list" id="taskList"></ul>
+    </div>
+    <div class="card">
+      <h2>📊 Můj postup</h2>
+      <div id="childHistory"></div>
+    </div>
+  </div>
+
+  <!-- Parent View -->
+  <div id="viewParent" class="hidden">
+    <div class="card rate-card" id="rateInfo">Načítám kurz...</div>
+    <div class="card">
+      <h2>⏳ Čeká na schválení</h2>
+      <div id="pendingList"></div>
+    </div>
+    <div class="card">
+      <h2>💸 Týdní výplata</h2>
+      <div id="settlementInfo"></div>
+      <button class="btn btn-primary" id="btnSettle" style="margin-top:1rem">Vyplatit</button>
+    </div>
+    <div class="card">
+      <h2>📜 Historie</h2>
+      <div id="parentHistory"></div>
+    </div>
+  </div>
+</main>
+
+<!-- PIN Modal -->
+<div id="pinModal" class="modal-overlay hidden">
+  <div class="modal">
+    <h3 id="pinTitle">Zadání PIN</h3>
+    <p id="pinMsg" class="modal-msg"></p>
+    <input type="password" id="pinInput" maxlength="8" placeholder="Zadej PIN..." />
+    <p id="pinError" class="error"></p>
+    <div class="modal-actions">
+      <button class="btn" id="pinCancel">Zrušit</button>
+      <button class="btn btn-primary" id="pinConfirm">Potvrdit</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const BASE = 'http://localhost:8000'
+let tasks = [], completions = [], settlements = [], rate = null
+let currentView = 'child'
+let pinAction = null
+
+// API calls
+async function getTasks() { return (await fetch(`${BASE}/tasks`)).json() }
+async function getCompletions() { return (await fetch(`${BASE}/completions`)).json() }
+async function getRate() { return (await fetch(`${BASE}/rate`)).json() }
+async function getSettlements() { return (await fetch(`${BASE}/settlements`)).json() }
+async function submitCompletion(taskId) {
+  return (await fetch(`${BASE}/completions`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({task_id: taskId}) })).json()
+}
+async function approveCompletion(id, pin) {
+  const r = await fetch(`${BASE}/completions/${id}/approve`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({pin}) })
+  if (!r.ok) throw new Error((await r.json()).detail || 'Chyba')
+  return r.json()
+}
+async function rejectCompletion(id, pin) {
+  const r = await fetch(`${BASE}/completions/${id}/reject`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({pin}) })
+  if (!r.ok) throw new Error((await r.json()).detail || 'Chyba')
+  return r.json()
+}
+async function createSettlement(pin) {
+  const r = await fetch(`${BASE}/settlements`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({pin}) })
+  if (!r.ok) throw new Error((await r.json()).detail || 'Chyba')
+  return r.json()
+}
+
+function taskName(id) { return tasks.find(t => t.id === id)?.name || '#' + id }
+function czk2sats(czk) { return rate ? Math.round((czk / rate.btc_czk) * 1e8) : '?' }
+
+async function loadAll() {
+  [tasks, completions, settlements] = await Promise.all([getTasks(), getCompletions(), getSettlements()])
+  try { rate = await getRate() } catch(e) {}
+  render()
+}
+
+function render() {
+  if (currentView === 'child') renderChild()
+  else renderParent()
+}
+
+function renderChild() {
+  const pending = completions.filter(c => c.status === 'pending').map(c => c.task_id)
+  document.getElementById('taskList').innerHTML = tasks.map(t => `
+    <li class="chore-item">
+      <div class="chore-info"><span class="chore-name">${t.name}</span><span class="chore-reward">${t.reward_czk} CZK</span></div>
+      <button class="btn btn-primary" ${pending.includes(t.id)?'disabled':''} onclick="submitTask(${t.id})">${pending.includes(t.id)?'Odesláno ✓':'Hotovo!'}</button>
+    </li>
+  `).join('')
+  
+  document.getElementById('childHistory').innerHTML = completions.length === 0 ? '<div class="empty">Zatím žádné záznamy.</div>' : `
+    <table class="table"><thead><tr><th>Úkol</th><th>Stav</th><th>Odmena</th></tr></thead><tbody>
+    ${completions.map(c => `<tr><td>${taskName(c.task_id)}</td><td><span class="badge badge-${c.status}">${c.status}</span></td><td>${c.reward_czk||'-'} CZK</td></tr>`).join('')}
+    </tbody></table>
+  `
+}
+
+function renderParent() {
+  const pending = completions.filter(c => c.status === 'pending')
+  const approved = completions.filter(c => c.status === 'approved')
+  const approvedSats = approved.reduce((s,c) => s + (c.reward_sats||0), 0)
+  
+  document.getElementById('rateInfo').textContent = rate ? `⚡ 1 CZK = ${czk2sats(1)} sats | BTC/CZK: ${rate.btc_czk.toLocaleString('cs-CZ')}` : 'Načítám kurz...'
+  
+  document.getElementById('pendingList').innerHTML = pending.length === 0 ? '<div class="empty">Všechno schváleno!</div>' : `
+    <table class="table"><thead><tr><th>Úkol</th><th>Odmena</th><th>Sats</th><th>Akce</th></tr></thead><tbody>
+    ${pending.map(c => `<tr>
+      <td>${taskName(c.task_id)}</td><td>${c.reward_czk} CZK</td><td>${czk2sats(c.reward_czk)}</td>
+      <td class="actions">
+        <button class="btn btn-success" onclick="approve(${c.id})">Schválit</button>
+        <button class="btn btn-danger" onclick="reject(${c.id})">Zamítnout</button>
+      </td>
+    </tr>`).join('')}
+    </tbody></table>
+  `
+  
+  const last = settlements[0]
+  document.getElementById('settlementInfo').innerHTML = last ? `<strong>Poslední výplata:</strong> ${last.total_sats} sats &mdash; ${new Date(last.settled_at).toLocaleDateString('cs-CZ')}<br>${last.voucher_url?`<a href="${last.voucher_url}" target="_blank">🔗 Otevřít voucher</a>`:''}` : '<div class="empty">Zatím žádná výplata.</div>'
+  document.getElementById('btnSettle').disabled = approved.length === 0
+  document.getElementById('btnSettle').textContent = `Vyplatit ${approved.length} schválených (${approvedSats} sats)`
+  
+  document.getElementById('parentHistory').innerHTML = `
+    <table class="table"><thead><tr><th>Úkol</th><th>Stav</th><th>Odmena</th><th>Sats</th></tr></thead><tbody>
+    ${completions.map(c => `<tr><td>${taskName(c.task_id)}</td><td><span class="badge badge-${c.status}">${c.status}</span></td><td>${c.reward_czk||'-'} CZK</td><td>${c.reward_sats||'-'}</td></tr>`).join('')}
+    </tbody></table>
+  `
+}
+
+async function submitTask(taskId) {
+  await submitCompletion(taskId)
+  await loadAll()
+}
+
+function approve(id) { showPin('Schválit úkol', `Schválit "${taskName(completions.find(c=>c.id===id).task_id)}"?`, () => approveCompletion(id, document.getElementById('pinInput').value)) }
+function reject(id) { showPin('Zamítnout úkol', `Zamítnout "${taskName(completions.find(c=>c.id===id).task_id)}"?`, () => rejectCompletion(id, document.getElementById('pinInput').value)) }
+
+function showPin(title, msg, action) {
+  document.getElementById('pinTitle').textContent = title
+  document.getElementById('pinMsg').textContent = msg
+  document.getElementById('pinInput').value = ''
+  document.getElementById('pinError').textContent = ''
+  document.getElementById('pinModal').classList.remove('hidden')
+  pinAction = action
+  document.getElementById('pinInput').focus()
+}
+
+document.getElementById('pinConfirm').onclick = async () => {
+  try {
+    await pinAction()
+    document.getElementById('pinModal').classList.add('hidden')
+    await loadAll()
+  } catch(e) {
+    document.getElementById('pinError').textContent = e.message
+  }
+}
+
+document.getElementById('pinCancel').onclick = () => document.getElementById('pinModal').classList.add('hidden')
+
+document.getElementById('btnSettle').onclick = () => showPin('Týdní výplata', 'Vyplatit schválené úkoly přes LNbits?', () => createSettlement(document.getElementById('pinInput').value))
+
+document.getElementById('btnChild').onclick = () => {
+  currentView = 'child'
+  document.getElementById('btnChild').classList.add('active')
+  document.getElementById('btnParent').classList.remove('active')
+  document.getElementById('viewChild').classList.remove('hidden')
+  document.getElementById('viewParent').classList.add('hidden')
+  render()
+}
+
+document.getElementById('btnParent').onclick = () => {
+  currentView = 'parent'
+  document.getElementById('btnParent').classList.add('active')
+  document.getElementById('btnChild').classList.remove('active')
+  document.getElementById('viewParent').classList.remove('hidden')
+  document.getElementById('viewChild').classList.add('hidden')
+  render()
+}
+
+loadAll()
+</script>
+</body>
+</html>
