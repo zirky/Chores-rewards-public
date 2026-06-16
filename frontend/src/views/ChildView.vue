@@ -6,6 +6,12 @@
       <p class="subtitle">Splň úkoly a vydělávej saty ⚡</p>
     </div>
 
+    <!-- Kurz BTC/CZK -->
+    <div class="card rate-card">
+      <span v-if="rate">⚡ BTC/CZK: {{ rate.rate_czk_per_btc.toLocaleString('cs-CZ') }}</span>
+      <span v-else class="muted">Načítám kurz…</span>
+    </div>
+
     <!-- Moje úkoly -->
     <div class="card">
       <h2>📝 Moje úkoly</h2>
@@ -77,7 +83,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import ChoreList from '../components/ChoreList.vue'
-import { getTasks, getHistory } from '../api.js'
+import { getTasks, getHistory, getRate } from '../api.js'
 
 const props = defineProps({
   childId:   { type: Number, required: true },
@@ -88,9 +94,10 @@ const tasks          = ref([])
 const history        = ref([])
 const loading        = ref(true)
 const historyLoading = ref(false)
+const rate           = ref(null)
 
 onMounted(async () => {
-  await Promise.all([loadTasks(), loadHistory()])
+  await Promise.all([loadTasks(), loadHistory(), loadRate()])
   loading.value = false
 })
 
@@ -102,6 +109,10 @@ async function loadHistory() {
   historyLoading.value = true
   try { history.value = await getHistory(props.childId) } catch {}
   finally { historyLoading.value = false }
+}
+
+async function loadRate() {
+  try { rate.value = await getRate() } catch {}
 }
 
 function fmt(dt) {
@@ -137,6 +148,17 @@ const settledSats = computed(() =>
 .muted { color: #888; font-style: italic; padding: 1rem 0; }
 .empty-state { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 2rem 0; color: #888; }
 .empty-icon  { font-size: 2.5rem; }
+/* kurz BTC */
+.rate-card {
+  background: #1a1a2e;
+  color: #ccc;
+  font-size: 0.9rem;
+  padding: 0.7rem 1.5rem;
+  border-radius: 12px;
+  margin-bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+}
 /* scrollovatelná tabulka */
 .table-scroll { max-height: 320px; overflow-y: auto; border-radius: 8px; border: 1px solid #f0f0f0; }
 .table-scroll thead th { position: sticky; top: 0; background: #fff; z-index: 1; box-shadow: 0 1px 0 #eee; }
