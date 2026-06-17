@@ -95,4 +95,5 @@ class PayoutResponse(BaseModel):
 
 class RateResponse(BaseModel):
     rate_czk_per_btc: float
+    rate_usd_per_btc: float
     source: str

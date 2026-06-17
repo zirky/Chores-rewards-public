@@ -6,9 +6,13 @@
       <p class="subtitle">Splň úkoly a vydělávej saty ⚡</p>
     </div>
 
-    <!-- Kurz BTC/CZK -->
+    <!-- Kurz BTC/CZK + BTC/USD -->
     <div class="card rate-card">
-      <span v-if="rate">⚡ BTC/CZK: {{ rate.rate_czk_per_btc.toLocaleString('cs-CZ') }}</span>
+      <span v-if="rate" class="rate-values">
+        ⚡ BTC/CZK: {{ rate.rate_czk_per_btc.toLocaleString('cs-CZ') }}
+        <span class="rate-sep">·</span>
+        BTC/USD: {{ rate.rate_usd_per_btc.toLocaleString('en-US') }}
+      </span>
       <span v-else class="muted">Načítám kurz…</span>
     </div>
 
@@ -159,6 +163,8 @@ const settledSats = computed(() =>
   display: flex;
   align-items: center;
 }
+.rate-values { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.rate-sep { color: #555; }
 /* scrollovatelná tabulka */
 .table-scroll { max-height: 320px; overflow-y: auto; border-radius: 8px; border: 1px solid #f0f0f0; }
 .table-scroll thead th { position: sticky; top: 0; background: #fff; z-index: 1; box-shadow: 0 1px 0 #eee; }

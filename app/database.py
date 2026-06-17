@@ -61,6 +61,8 @@ MIGRATIONS = [
         fetched_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now'))
     )
     """,
+    # v0.6 – přidat rate_usd do btc_rate_cache
+    "ALTER TABLE btc_rate_cache ADD COLUMN rate_usd REAL NOT NULL DEFAULT 0",
 ]
 
 

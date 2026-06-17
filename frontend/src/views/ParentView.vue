@@ -31,7 +31,11 @@
     <!-- HLAVNÍ ROZHRANÍ -->
     <template v-else-if="mode === 'app'">
       <div class="card rate-card">
-        <span v-if="rate">⚡ BTC/CZK: {{ rate.rate_czk_per_btc.toLocaleString('cs-CZ') }}</span>
+        <span v-if="rate" class="rate-values">
+          ⚡ BTC/CZK: {{ rate.rate_czk_per_btc.toLocaleString('cs-CZ') }}
+          <span class="rate-sep">·</span>
+          BTC/USD: {{ rate.rate_usd_per_btc.toLocaleString('en-US') }}
+        </span>
         <span v-else class="muted">Načítám kurz…</span>
         <button class="btn btn-ghost btn-sm logout-btn" @click="logout">🚪 Odhlásit</button>
       </div>
@@ -606,6 +610,8 @@ function showToast(msg, type = 'ok') {
 .error-msg { color: #e94560; margin-top: 0.5rem; font-size: 0.9rem; }
 .warning-text { color: #b07a00; font-weight: 600; }
 .rate-card { background: #1a1a2e; color: #ccc; font-size: 0.9rem; padding: 0.7rem 1.5rem; border-radius: 12px; margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+.rate-values { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.rate-sep { color: #555; }
 .logout-btn { font-size: 0.8rem; padding: 0.25rem 0.75rem; }
 .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
 .section-header h2 { margin: 0; }
@@ -615,11 +621,9 @@ function showToast(msg, type = 'ok') {
 .ln-addr { font-size: 0.85rem; color: #016e5b; font-weight: 500; }
 .addr { font-size: 0.8rem; color: #666; }
 .voucher-label { color: #b07a00; }
-/* ── Scrollovatelné tabulky ─────────────────────────────────── */
 .table-scroll { max-height: 320px; overflow-y: auto; border-radius: 8px; border: 1px solid #f0f0f0; }
 .table-scroll-sm { max-height: 240px; }
 .table-scroll thead th { position: sticky; top: 0; background: #fff; z-index: 1; box-shadow: 0 1px 0 #eee; }
-/* ─────────────────────────────────────────────────────────────── */
 .table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
 .table th { text-align: left; padding: 0.5rem; border-bottom: 2px solid #eee; }
 .table td { padding: 0.5rem; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }

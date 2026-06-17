@@ -8,7 +8,7 @@ import qrcode
 from app.database import get_db
 from app.models import PayoutResponse, RateResponse
 from app.auth import require_parent
-from app.coingecko import get_btc_czk_rate, czk_to_sats
+from app.coingecko import get_btc_rates, czk_to_sats
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ LNBITS_URL       = os.getenv("LNBITS_URL", "https://legend.lnbits.com").rstrip("
 LNBITS_ADMIN_KEY = os.getenv("LNBITS_ADMIN_KEY", "")
 
 
-# ── Helpers ─────────────────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────────────────────
 
 async def _child_or_404(child_id: int, db):
     async with db.execute(
@@ -27,7 +27,7 @@ async def _child_or_404(child_id: int, db):
     ) as cur:
         row = await cur.fetchone()
     if not row:
-        raise HTTPException(404, "Ýtě nenalezeno")
+        raise HTTPException(404, "Dítě nenalezeno")
     return row
 
 
@@ -47,16 +47,16 @@ async def _approved_unpaid(child_id: int, db) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-# ── Endpointy ───────────────────────────────────────────────────────────────────────────────────
+# ── Endpointy ───────────────────────────────────────────────────────────────────────────────────────
 
-@router.get("/rate", response_model=RateResponse, summary="Aktuální BTC/CZK kurz")
+@router.get("/rate", response_model=RateResponse, summary="Aktuální BTC kurz (CZK + USD)")
 async def get_rate():
     """Veřejný endpoint – nevyadžuje auth."""
     try:
-        rate = await get_btc_czk_rate()
+        rate_czk, rate_usd = await get_btc_rates()
     except Exception as e:
         raise HTTPException(503, f"Nelze načíst kurz: {e}")
-    return {"rate_czk_per_btc": rate, "source": "coingecko"}
+    return {"rate_czk_per_btc": rate_czk, "rate_usd_per_btc": rate_usd, "source": "coingecko"}
 
 
 @router.get(
@@ -172,194 +172,126 @@ async def check_payment_status(payout_id: int, db=Depends(get_db)):
 
         if confirmed is True and payout["status"] != "paid":
             now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-            await db.execute(
+            async with db.execute(
                 "UPDATE payouts SET status='paid', paid_at=? WHERE id=?",
                 (now, payout_id)
-            )
+            ):
+                pass
             await db.commit()
             payout["status"] = "paid"
             payout["paid_at"] = now
-        elif confirmed is False and payout["status"] == "paid":
-            confirmed = True
 
-        payout["lnbits_confirmed"] = confirmed
-    else:
-        payout["lnbits_confirmed"] = None
+    return {**payout, "lnbits_confirmed": confirmed if payout["payout_method"] == "ln_address" else None}
 
-    return payout
+
+# ── LNbits helpers ──────────────────────────────────────────────────────────────────────────────
+
+async def _pay_ln_address(ln_address: str, amount_sats: int, description: str) -> str:
+    """Odešle platbu na Lightning adresu přes LNbits a vrátí payment_hash."""
+    # 1. Resolve LNURL
+    local, domain = ln_address.split("@")
+    lnurl_endpoint = f"https://{domain}/.well-known/lnurlp/{local}"
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.get(lnurl_endpoint)
+        r.raise_for_status()
+        lnurl_data = r.json()
+
+        min_sendable = lnurl_data.get("minSendable", 1000)   # msat
+        max_sendable = lnurl_data.get("maxSendable", 10**12)  # msat
+        callback     = lnurl_data["callback"]
+
+        amount_msat = amount_sats * 1000
+        if not (min_sendable <= amount_msat <= max_sendable):
+            raise ValueError(
+                f"Částka {amount_sats} sats je mimo povolený rozsah "
+                f"({min_sendable//1000}–{max_sendable//1000} sats)"
+            )
+
+        # 2. Získej invoice
+        cb_r = await client.get(callback, params={"amount": amount_msat, "comment": description[:144]})
+        cb_r.raise_for_status()
+        invoice_data = cb_r.json()
+        payment_request = invoice_data["pr"]
+
+        # 3. Zaplať přes LNbits
+        pay_r = await client.post(
+            f"{LNBITS_URL}/api/v1/payments",
+            headers={"X-Api-Key": LNBITS_ADMIN_KEY, "Content-Type": "application/json"},
+            json={"out": True, "bolt11": payment_request},
+            timeout=30.0
+        )
+        pay_r.raise_for_status()
+        return pay_r.json().get("payment_hash", "")
+
+
+async def _create_lnurl_withdraw(amount_sats: int, label: str) -> str:
+    """Vytvoří LNURL-withdraw voucher v LNbits a vrátí jeho jedinečný hash."""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.post(
+            f"{LNBITS_URL}/withdraw/api/v1/links",
+            headers={"X-Api-Key": LNBITS_ADMIN_KEY, "Content-Type": "application/json"},
+            json={
+                "title":       label,
+                "min_withdrawable": amount_sats,
+                "max_withdrawable": amount_sats,
+                "uses":        1,
+                "wait_time":   1,
+                "is_unique":   True,
+            }
+        )
+        r.raise_for_status()
+        data = r.json()
+        return data.get("id", "")
+
+
+async def _check_lnbits_payment(payment_hash: str) -> bool:
+    """Ověří stav platby v LNbits. Vrátí True/False nebo vyhodí výjimku."""
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(
+            f"{LNBITS_URL}/api/v1/payments/{payment_hash}",
+            headers={"X-Api-Key": LNBITS_ADMIN_KEY},
+        )
+        r.raise_for_status()
+        return r.json().get("paid", False)
 
 
 @router.get(
-    "/voucher-qr/{payout_id}",
-    summary="LNURL-withdraw QR jako Base64 PNG (rodič)",
+    "/voucher/{payout_id}/qr",
+    summary="QR kód pro LNURL-withdraw voucher (rodič)",
     dependencies=[Depends(require_parent)]
 )
-async def voucher_qr(payout_id: int, db=Depends(get_db)):
+async def get_voucher_qr(payout_id: int, db=Depends(get_db)):
     async with db.execute(
-        "SELECT id, status, payout_method, ln_payment_hash FROM payouts WHERE id=?",
+        "SELECT id, payout_method, ln_payment_hash FROM payouts WHERE id=?",
         (payout_id,)
     ) as cur:
         row = await cur.fetchone()
     if not row:
         raise HTTPException(404, "Payout nenalezen")
+    if row["payout_method"] != "voucher":
+        raise HTTPException(400, "Tento payout není voucher")
 
-    payout = dict(row)
-    if payout["payout_method"] != "voucher":
-        raise HTTPException(400, "Tento payout není voucher – použij payment_hash pro LN platbu")
-    if not payout["ln_payment_hash"]:
-        raise HTTPException(500, "Voucher ID chybí v DB")
+    withdraw_id = row["ln_payment_hash"]
 
-    try:
-        lnurl_str = await _get_lnurl_withdraw_string(payout["ln_payment_hash"])
-    except Exception as e:
-        raise HTTPException(502, f"Nelze načíst LNURL z LNbits: {e}")
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(
+            f"{LNBITS_URL}/withdraw/api/v1/links/{withdraw_id}",
+            headers={"X-Api-Key": LNBITS_ADMIN_KEY},
+        )
+        r.raise_for_status()
+        link_data = r.json()
 
-    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=8, border=2)
-    qr.add_data(lnurl_str.upper())
+    lnurl = link_data.get("lnurl", "")
+    if not lnurl:
+        raise HTTPException(502, "LNbits nevrátil LNURL")
+
+    qr = qrcode.QRCode(box_size=6, border=2)
+    qr.add_data(lnurl.upper())
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     qr_b64 = base64.b64encode(buf.getvalue()).decode()
 
-    return {
-        "payout_id": payout_id,
-        "lnurl": lnurl_str.upper(),
-        "qr_png_base64": qr_b64,
-    }
-
-
-@router.get(
-    "/history/{child_id}",
-    summary="Historie výplat dítěte (rodič)",
-    dependencies=[Depends(require_parent)]
-)
-async def payout_history(child_id: int, db=Depends(get_db)):
-    await _child_or_404(child_id, db)
-    async with db.execute(
-        """
-        SELECT id, child_id, total_sats, total_czk, status,
-               payout_method, ln_payment_hash, created_at, paid_at
-        FROM   payouts
-        WHERE  child_id = ?
-        ORDER  BY created_at DESC
-        """,
-        (child_id,)
-    ) as cur:
-        rows = await cur.fetchall()
-    return [dict(r) for r in rows]
-
-
-# ── LNbits helpers ───────────────────────────────────────────────────────────────────────────────────────
-
-def _lnbits_headers() -> dict:
-    if not LNBITS_ADMIN_KEY:
-        raise ValueError("LNBITS_ADMIN_KEY není nastaven v .env")
-    return {"X-Api-Key": LNBITS_ADMIN_KEY, "Content-Type": "application/json"}
-
-
-def _is_bitlifi(address: str) -> bool:
-    """Vrátí True pro jakýkoli Bitlifi identifikátor (tel. č. nebo alias @bitlifi.com)."""
-    return address.startswith("+") or address.endswith("@bitlifi.com")
-
-
-def _bitlifi_identifier(address: str) -> str:
-    """
-    Vrátí identifier pro Bitlifi LNURL endpoint.
-    Formáty: tel@bitlifi.com → tel, alias@bitlifi.com → alias, +tel → +tel
-    """
-    return address.split("@")[0]
-
-
-async def _resolve_lnurl_pay(address: str) -> str:
-    """
-    Zjítí callback URL pro LNURL-pay.
-    - Bitlifi adresa (tel. č. nebo @bitlifi.com alias) → přímý fetch z Bitlifi
-    - ostatní Lightning Address → LNbits lnurlscan
-    """
-    async with httpx.AsyncClient(timeout=15) as client:
-        if _is_bitlifi(address):
-            identifier = _bitlifi_identifier(address)
-            url = httpx.URL(f"https://www.bitlifi.com/.well-known/lnurlp/{identifier}")
-            print(f"[_resolve_lnurl_pay] Bitlifi fetch: {url}", flush=True)
-            r = await client.get(url, headers={"Accept": "application/json"})
-            print(f"[_resolve_lnurl_pay] Bitlifi response {r.status_code}: {r.text[:300]}", flush=True)
-            r.raise_for_status()
-            return r.json()["callback"]
-        else:
-            h = _lnbits_headers()
-            print(f"[_resolve_lnurl_pay] lnurlscan: {LNBITS_URL}/api/v1/lnurlscan/{address}", flush=True)
-            r = await client.get(f"{LNBITS_URL}/api/v1/lnurlscan/{address}", headers=h)
-            print(f"[_resolve_lnurl_pay] lnurlscan response {r.status_code}: {r.text[:300]}", flush=True)
-            r.raise_for_status()
-            return r.json()["callback"]
-
-
-async def _pay_ln_address(ln_address: str, amount_sats: int, child_name: str = "") -> str:
-    """Pošle platbu na Lightning adresu nebo Bitlifi. Vrátí payment_hash."""
-    h = _lnbits_headers()
-    async with httpx.AsyncClient(timeout=20) as client:
-        callback = await _resolve_lnurl_pay(ln_address)
-        print(f"[_pay_ln_address] callback={callback}, sats={amount_sats}", flush=True)
-
-        r = await client.get(callback, params={
-            "amount": amount_sats * 1000,
-            "comment": f"Odměna za domácí práce: {amount_sats} sats"
-        })
-        print(f"[_pay_ln_address] invoice response {r.status_code}: {r.text[:300]}", flush=True)
-        r.raise_for_status()
-        bolt11 = r.json()["pr"]
-
-        r = await client.post(
-            f"{LNBITS_URL}/api/v1/payments",
-            headers=h,
-            json={"out": True, "bolt11": bolt11}
-        )
-        print(f"[_pay_ln_address] LNbits payment {r.status_code}: {r.text[:300]}", flush=True)
-        r.raise_for_status()
-        return r.json().get("payment_hash", "")
-
-
-async def _create_lnurl_withdraw(amount_sats: int, child_name: str) -> str:
-    """Vytvoří LNURL-withdraw voucher (1 použití). Vrátí withdraw link ID."""
-    h = _lnbits_headers()
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(
-            f"{LNBITS_URL}/withdraw/api/v1/links",
-            headers=h,
-            json={
-                "title":           f"Odmena {child_name}",
-                "min_withdrawable": amount_sats,
-                "max_withdrawable": amount_sats,
-                "uses":            1,
-                "wait_time":       1,
-                "is_unique":       True,
-            }
-        )
-        r.raise_for_status()
-        return r.json()["id"]
-
-
-async def _get_lnurl_withdraw_string(link_id: str) -> str:
-    """Načte LNURL string pro zobrazení QR kódu."""
-    h = _lnbits_headers()
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get(
-            f"{LNBITS_URL}/withdraw/api/v1/links/{link_id}",
-            headers=h
-        )
-        r.raise_for_status()
-        data = r.json()
-        return data.get("lnurl") or data.get("lnurl_withdraw") or link_id
-
-
-async def _check_lnbits_payment(payment_hash: str) -> bool:
-    """Ověří zda byl payment_hash zaplacen. Vrátí True/False."""
-    h = _lnbits_headers()
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get(
-            f"{LNBITS_URL}/api/v1/payments/{payment_hash}",
-            headers=h
-        )
-        r.raise_for_status()
-        return r.json().get("paid", False)
+    return {"lnurl": lnurl, "qr_png_base64": qr_b64}
