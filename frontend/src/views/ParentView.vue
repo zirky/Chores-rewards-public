@@ -301,7 +301,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, reactive } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive } from 'vue'
 import PinModal from '../components/PinModal.vue'
 import {
   getPending, approveCompletion, rejectCompletion,
@@ -316,6 +316,35 @@ const mode         = ref('login')
 const loginPin     = ref('')
 const loginError   = ref('')
 const loginLoading = ref(false)
+
+// ── Auto-logout při nečinnosti (1 minuta) ─────────────────────
+const IDLE_MS = 60_000
+let idleTimer = null
+
+function resetIdleTimer() {
+  clearTimeout(idleTimer)
+  idleTimer = setTimeout(() => {
+    if (mode.value === 'app') {
+      logout()
+      showToast('Automaticky odhlášen z důvodu nečinnosti', 'warn')
+    }
+  }, IDLE_MS)
+}
+
+function startIdleWatch() {
+  ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click']
+    .forEach(e => window.addEventListener(e, resetIdleTimer, { passive: true }))
+  resetIdleTimer()
+}
+
+function stopIdleWatch() {
+  clearTimeout(idleTimer)
+  ;['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click']
+    .forEach(e => window.removeEventListener(e, resetIdleTimer))
+}
+
+onUnmounted(() => stopIdleWatch())
+// ──────────────────────────────────────────────────────────────
 
 onMounted(async () => {
   try {
@@ -342,6 +371,7 @@ async function doLogin() {
   try {
     await parentLogin(loginPin.value)
     mode.value = 'app'; loginPin.value = ''
+    startIdleWatch()
     await loadAll()
     if (activeChildren.value.length > 0) await loadPayoutHistory(activeChildren.value[0])
   } catch (e) {
@@ -351,6 +381,7 @@ async function doLogin() {
 }
 
 function logout() {
+  stopIdleWatch()
   window.__parentToken = null; mode.value = 'login'
   pending.value = []; children.value = []; payoutHistory.value = []; allTasks.value = []
   Object.keys(balances).forEach(k => delete balances[k])
